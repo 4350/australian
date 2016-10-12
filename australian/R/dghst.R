@@ -36,11 +36,21 @@
   #Q <- mahalanobis(x, FALSE, inv.sigma, inverted = TRUE)
   Q <- rowSums(x %*% inv.sigma * x)
 
+  lambda.min.d.2 <- lambda - d / 2
+
+  # Symmetric Student's t
+  if (sum(abs(gamma)) == 0) {
+    interm <- chi + Q
+    log.const.top <- -lambda * log(chi) + lgamma(-lambda.min.d.2)
+    log.const.bottom <- d / 2 * log(pi) + 0.5 * log(det.sigma) + lgamma(-lambda)
+    log.top <- lambda.min.d.2 * log(interm)
+
+    return(log.const.top + log.top - log.const.bottom)
+  }
   g <- inv.sigma %*% gamma
   skewness.scaled <- as.vector(x %*% g)
   skewness.norm <- t(gamma) %*% g
 
-  lambda.min.d.2 <- lambda - d / 2
   interm <- sqrt((chi + Q) * skewness.norm)
 
   log.const.top <- -lambda * log(chi) - lambda.min.d.2 * log(skewness.norm)

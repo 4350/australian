@@ -1,4 +1,4 @@
-#' @importFrom parallel mcmapply mclapply
+#' @importFrom foreach foreach
 NULL
 
 setClassUnion("matrixOrNULL",members=c("matrix", "NULL"))
@@ -85,9 +85,11 @@ copula_filter <- function(spec, u) {
 .copula_shocks <- function(spec, u) {
   uv_distributions <- .copula_uv_distributions(spec)
 
-  invert <- function(dist, i) ghyp::qghyp(u[, i], dist, method = 'splines')
+  shocks <- foreach(i = 1:ncol(u)) %dopar% {
+    ghyp::qghyp(u[, i], uv_distributions[[i]], method = 'splines')
+  }
 
-  rbind(mcmapply(invert, uv_distributions, 1:ncol(u)))
+  matrix(unlist(shocks), ncol = ncol(u))
 }
 
 #' Standardize shocks by forcing them to have expectation 0 and unit variance
@@ -99,7 +101,6 @@ copula_filter <- function(spec, u) {
 #' @param shocks
 #'
 #' @return TxN matrix of standardized shocks
-#' @importFrom parallel mcmapply
 .copula_shocks_std <- function(spec, shocks) {
   uv_distributions <- .copula_uv_distributions(spec)
   T <- nrow(shocks)
@@ -109,7 +110,7 @@ copula_filter <- function(spec, u) {
   standardize <- function(dist, i)
     (shocks[, i] - ghyp::mean(dist)) / sqrt(ghyp::vcov(dist))
 
-  shocks <- rbind(mcmapply(standardize, uv_distributions, 1:ncol(shocks)))
+  shocks <- rbind(mapply(standardize, uv_distributions, 1:ncol(shocks)))
 
   # Step 2: Following Christoffersen's first paper, we also scale the shocks
   # by the "conditional variance" for this period. Supposedly improves the
@@ -186,7 +187,8 @@ copula_filter <- function(spec, u) {
 
   N <- dim(Q)[1]
   T <- dim(Q)[3]
-  correlation_list <- mclapply(seq(T), fn)
+
+  correlation_list <- lapply(seq(T), fn)
 
   array(unlist(correlation_list), dim = c(N, N, T))
 }
@@ -208,18 +210,21 @@ copula_filter <- function(spec, u) {
   uv_distributions <- .copula_uv_distributions(spec)
 
   fn <- function(dist, i) ghyp::dghyp(shocks[, i], dist, logvalue = TRUE)
-  cbind(rowSums(mcmapply(fn, uv_distributions, 1:ncol(shocks))))
+
+  ll <- foreach(i = 1:ncol(shocks), .combine = 'cbind') %do% {
+    ghyp::dghyp(shocks[, i], uv_distributions[[i]], logvalue = TRUE)
+  }
+
+  cbind(rowSums(ll))
 }
 
 .copula_ll_joint <- function(spec, shocks, Correlation) {
   fn <- function(t) {
-    ghyp::dghyp(shocks[t, ], .copula_mv_distribution(spec, Correlation[,, t]),
-                logvalue = TRUE)
+    mvtnorm::dmvnorm(shocks[t, ], sigma = Correlation[,, t], log = TRUE)
   }
 
-  if (!all(spec@distribution@gamma == 0)) {
-    stopifnot(is.finite(spec@distribution@nu))
-
+  # Use our special density function that cuts of a lot of the fat
+  if (is.finite(spec@distribution@nu)) {
     fn <- function(t) {
       temp <- .dghst(rbind(shocks[t, ]),
               nu = spec@distribution@nu,
@@ -230,5 +235,14 @@ copula_filter <- function(spec, u) {
     }
   }
 
-  cbind(unlist(mclapply(seq(nrow(shocks)), fn)))
+  # If you ever feel the need to verify our own density function, uncomment
+  # the below lines to use ghyp package. It takes CONSIDERABLY longer.
+  # fn <- function(t) {
+  #   mv_distribution <- .copula_mv_distribution(spec, Correlation[,, t])
+  #   ghyp::dghyp(shocks[t, ], mv_distribution, logvalue = TRUE)
+  # }
+
+  # Running this in parallel actually seems to have little benefit
+  ll <- lapply(seq(nrow(shocks)), fn)
+  cbind(unlist(ll))
 }
