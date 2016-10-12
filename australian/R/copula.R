@@ -1,4 +1,4 @@
-#' @importFrom parallel mcmapply mclapply
+#' @importFrom foreach foreach
 NULL
 
 setClassUnion("matrixOrNULL",members=c("matrix", "NULL"))
@@ -19,15 +19,25 @@ CopulaSpecification <- setClass('CopulaSpecification',
                                           dynamics = 'CopulaDynamics'))
 
 copula_filter <- function(spec, u) {
+  tic('shocks')
   shocks <- .copula_shocks(spec, u)
+  toc()
+  tic('shocks_std')
   shocks_std <- .copula_shocks_std(spec, shocks)
+  toc()
 
+  tic('Omega')
   if (is.null(spec@dynamics@Omega)) {
     spec@dynamics@Omega <- .copula_Omega(spec, shocks_std)
   }
+  toc()
 
+  tic("Correlation")
   Correlation <- .copula_Correlation(.copula_Q(spec, shocks_std))
+  toc()
+  tic("Scores")
   scores <- .copula_scores(spec, shocks, Correlation)
+  toc()
 
   list(
     spec = spec,
@@ -74,9 +84,11 @@ copula_filter <- function(spec, u) {
 .copula_shocks <- function(spec, u) {
   uv_distributions <- .copula_uv_distributions(spec)
 
-  invert <- function(dist, i) ghyp::qghyp(u[, i], dist, method = 'splines')
+  shocks <- foreach(i = 1:ncol(u)) %dopar% {
+    ghyp::qghyp(u[, i], uv_distributions[[i]], method = 'splines')
+  }
 
-  rbind(mcmapply(invert, uv_distributions, 1:ncol(u)))
+  matrix(unlist(shocks), ncol = ncol(u))
 }
 
 #' Standardize shocks by forcing them to have expectation 0 and unit variance
@@ -88,7 +100,6 @@ copula_filter <- function(spec, u) {
 #' @param shocks
 #'
 #' @return TxN matrix of standardized shocks
-#' @importFrom parallel mcmapply
 .copula_shocks_std <- function(spec, shocks) {
   uv_distributions <- .copula_uv_distributions(spec)
   T <- nrow(shocks)
@@ -98,7 +109,7 @@ copula_filter <- function(spec, u) {
   standardize <- function(dist, i)
     (shocks[, i] - ghyp::mean(dist)) / sqrt(ghyp::vcov(dist))
 
-  shocks <- rbind(mcmapply(standardize, uv_distributions, 1:ncol(shocks)))
+  shocks <- rbind(mapply(standardize, uv_distributions, 1:ncol(shocks)))
 
   # Step 2: Following Christoffersen's first paper, we also scale the shocks
   # by the "conditional variance" for this period. Supposedly improves the
@@ -175,7 +186,8 @@ copula_filter <- function(spec, u) {
 
   N <- dim(Q)[1]
   T <- dim(Q)[3]
-  correlation_list <- mclapply(seq(T), fn)
+
+  correlation_list <- lapply(seq(T), fn)
 
   array(unlist(correlation_list), dim = c(N, N, T))
 }
@@ -183,8 +195,12 @@ copula_filter <- function(spec, u) {
 # Log Likelihoods --------------------------------------------------------
 
 .copula_scores <- function(spec, shocks, Correlation) {
+  tic('joint')
   joint <- .copula_ll_joint(spec, shocks, Correlation)
+  toc()
+  tic('marginal')
   marginal <- .copula_ll_marginal(spec, shocks)
+  toc()
 
   joint - marginal
 }
@@ -193,7 +209,12 @@ copula_filter <- function(spec, u) {
   uv_distributions <- .copula_uv_distributions(spec)
 
   fn <- function(dist, i) ghyp::dghyp(shocks[, i], dist, logvalue = TRUE)
-  cbind(rowSums(mcmapply(fn, uv_distributions, 1:ncol(shocks))))
+
+  ll <- foreach(i = 1:ncol(shocks), .combine = 'cbind') %do% {
+    ghyp::dghyp(shocks[, i], uv_distributions[[i]], logvalue = TRUE)
+  }
+
+  cbind(rowSums(ll))
 }
 
 .copula_ll_joint <- function(spec, shocks, Correlation) {
@@ -215,5 +236,7 @@ copula_filter <- function(spec, u) {
     }
   }
 
-  cbind(unlist(mclapply(seq(nrow(shocks)), fn)))
+  cbind(unlist(
+    foreach(t = 1:nrow(shocks),
+            .export = c('.copula_mv_distribution', '.dghst')) %dopar% fn(t)))
 }
