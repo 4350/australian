@@ -219,8 +219,13 @@ copula_filter <- function(spec, u) {
 
 .copula_ll_joint <- function(spec, shocks, Correlation) {
   fn <- function(t) {
-    ghyp::dghyp(shocks[t, ], .copula_mv_distribution(spec, Correlation[,, t]),
-                logvalue = TRUE)
+    mvtnorm::dmvnorm(shocks[t, ], sigma = Correlation[,, t], log = TRUE)
+  }
+
+  if (is.finite(spec@distribution@nu)) {
+    fn <- function(t) {
+      mvtnorm::dmvt(shocks[t, ], sigma = Correlation[,, t], log = TRUE)
+    }
   }
 
   if (!all(spec@distribution@gamma == 0)) {
@@ -236,7 +241,7 @@ copula_filter <- function(spec, u) {
     }
   }
 
-  cbind(unlist(
-    foreach(t = 1:nrow(shocks),
-            .export = c('.copula_mv_distribution', '.dghst')) %dopar% fn(t)))
+  # Running this in parallel actually seems to have little benefit
+  ll <- lapply(seq(nrow(shocks)), fn)
+  cbind(unlist(ll))
 }

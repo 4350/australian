@@ -12,6 +12,7 @@ Encoding: UTF-8
 LazyData: true
 Imports:
   ghyp (>= 1.5.7),
+  mvtnorm,
   parallel,
   doParallel,
   foreach,
