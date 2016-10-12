@@ -222,15 +222,8 @@ copula_filter <- function(spec, u) {
     mvtnorm::dmvnorm(shocks[t, ], sigma = Correlation[,, t], log = TRUE)
   }
 
+  # Use our special density function that cuts of a lot of the fat
   if (is.finite(spec@distribution@nu)) {
-    fn <- function(t) {
-      mvtnorm::dmvt(shocks[t, ], sigma = Correlation[,, t], log = TRUE)
-    }
-  }
-
-  if (!all(spec@distribution@gamma == 0)) {
-    stopifnot(is.finite(spec@distribution@nu))
-
     fn <- function(t) {
       temp <- .dghst(rbind(shocks[t, ]),
               nu = spec@distribution@nu,
