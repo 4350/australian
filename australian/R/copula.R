@@ -234,6 +234,13 @@ copula_filter <- function(spec, u) {
     }
   }
 
+  # If you ever feel the need to verify our own density function, uncomment
+  # the below lines to use ghyp package. It takes CONSIDERABLY longer.
+  # fn <- function(t) {
+  #   mv_distribution <- .copula_mv_distribution(spec, Correlation[,, t])
+  #   ghyp::dghyp(shocks[t, ], mv_distribution, logvalue = TRUE)
+  # }
+
   # Running this in parallel actually seems to have little benefit
   ll <- lapply(seq(nrow(shocks)), fn)
   cbind(unlist(ll))
