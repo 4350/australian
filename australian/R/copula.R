@@ -1,4 +1,4 @@
-#' @importFrom foreach foreach
+#' @importFrom foreach foreach %do% %dopar%
 NULL
 
 setClassUnion("matrixOrNULL",members=c("matrix", "NULL"))
@@ -68,7 +68,7 @@ copula_filter <- function(spec, u) {
 
 #' Compute shocks in the copula model
 #'
-#' @param spec
+#' @param spec A CopulaSpecification
 #' @param u TxN matrix of uniforms
 #'
 #' @return shocks TxN matrix of distributed shocks
@@ -87,8 +87,8 @@ copula_filter <- function(spec, u) {
 #' Christoffersen for details and whatever paper he refers to for
 #' justification.
 #'
-#' @param spec
-#' @param shocks
+#' @param spec CopulaSpecification
+#' @param shocks TxN shocks
 #'
 #' @return TxN matrix of standardized shocks
 .copula_shocks_std <- function(spec, shocks) {
