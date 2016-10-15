@@ -19,26 +19,16 @@ CopulaSpecification <- setClass('CopulaSpecification',
                                           dynamics = 'CopulaDynamics'))
 
 copula_filter <- function(spec, u) {
-  tic('shocks')
   shocks <- .copula_shocks(spec, u)
-  toc()
-  tic('shocks_std')
   shocks_std <- .copula_shocks_std(spec, shocks)
-  toc()
 
-  tic('Omega')
   if (is.null(spec@dynamics@Omega)) {
     spec@dynamics@Omega <- .copula_Omega(spec, shocks_std)
   }
-  toc()
 
-  tic('Correlation')
   Correlation <- .copula_Correlation(.copula_Q(spec, shocks_std))
-  toc()
 
-  tic('Scores')
   scores <- .copula_scores(spec, shocks, Correlation)
-  toc()
 
   list(
     spec = spec,
@@ -196,12 +186,8 @@ copula_filter <- function(spec, u) {
 # Log Likelihoods --------------------------------------------------------
 
 .copula_scores <- function(spec, shocks, Correlation) {
-  tic('joint')
   joint <- .copula_ll_joint(spec, shocks, Correlation)
-  toc()
-  tic('marginal')
   marginal <- .copula_ll_marginal(spec, shocks)
-  toc()
 
   joint - marginal
 }
