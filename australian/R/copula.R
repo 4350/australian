@@ -3,21 +3,25 @@ NULL
 
 setClassUnion("matrixOrNULL",members=c("matrix", "NULL"))
 
+#' @export CopulaDistribution
 CopulaDistribution <- setClass('CopulaDistribution',
                                slots = c(nu = 'numeric',
                                          gamma = 'numeric'),
                                prototype = list(nu = Inf))
 
+#' @export CopulaDynamics
 CopulaDynamics <- setClass('CopulaDynamics',
                            slots = c(alpha = 'numeric',
                                      beta = 'numeric',
                                      Omega = 'matrixOrNULL'),
                            prototype = list(alpha = 0, beta = 0, Omega = NULL))
 
+#' @export CopulaSpecification
 CopulaSpecification <- setClass('CopulaSpecification',
                                 slots = c(distribution = 'CopulaDistribution',
                                           dynamics = 'CopulaDynamics'))
 
+#' @export
 copula_filter <- function(spec, u) {
   shocks <- .copula_shocks(spec, u)
   shocks_std <- .copula_shocks_std(spec, shocks)
@@ -38,6 +42,42 @@ copula_filter <- function(spec, u) {
     scores = scores,
     ll = sum(scores)
   )
+}
+
+#' Simulate uniform residuals from the copula
+#'
+#' @param spec CopulaSpecification
+#' @param n.sim Simulation horizon
+#' @param m.sim Number of simulation
+#' @param Q_initial What to set Q to initially (default: Omega)
+#'
+#' @return List of m.sim n.simxN uniform residuals
+#' @export
+copula_simulate <- function(spec, n.sim, m.sim, Q_initial = NULL) {
+  if (is.null(Q_initial)) {
+    stopifnot(!is.null(spec@dynamics@Omega))
+    Q_initial <- spec@dynamics@Omega
+  }
+
+  uv_distributions <- .copula_uv_distributions(spec)
+
+  foreach(i = 1:m.sim) %dopar% {
+    shocks <- .copula_simulate_shocks(spec, n.sim, Q_initial)
+
+    # Compute the uniform residuals using the marginal distributions of
+    # the copula
+    sapply(seq_along(uv_distributions),
+           function(i) ghyp::pghyp(shocks[, i], uv_distributions[[i]]))
+  }
+}
+
+#' @export
+copula_is_constant <- function(spec) {
+  all(c(spec@dynamics@alpha, spec@dynamics@beta) == 0)
+}
+
+.copula_rghyp <- function(n, spec, Correlation) {
+  ghyp::rghyp(n, .copula_mv_distribution(spec, Correlation))
 }
 
 
@@ -142,27 +182,30 @@ copula_filter <- function(spec, u) {
   correlation
 }
 
-.copula_Q <- function(spec, shocks_std) {
-  N <- ncol(shocks_std)
-  T <- nrow(shocks_std)
+.copula_Q_tp1 <- function(spec, Q_t, shocks_std_t) {
   alpha <- spec@dynamics@alpha
   beta <- spec@dynamics@beta
   Omega <- spec@dynamics@Omega
-
   stopifnot(!is.null(Omega))
+
+  (1 - alpha - beta) * Omega +
+    beta * Q_t +
+    alpha * shocks_std_t %*% t(shocks_std_t)
+}
+
+.copula_Q <- function(spec, shocks_std) {
+  N <- ncol(shocks_std)
+  T <- nrow(shocks_std)
 
   # One extra observation at the start
   Q <- array(dim = c(N, N, T + 1))
   shocks_std <- rbind(0, shocks_std)
 
   # t0 observation = unconditional; diag(1, N) is also plausible
-  Q[,, 1] <- Omega
+  Q[,, 1] <- spec@dynamics@Omega
 
   for (t in 2:(T + 1)) {
-    Q[,, t] <-
-      (1 - alpha - beta) * Omega +
-      beta * Q[,, t - 1] +
-      alpha * (shocks_std[t - 1, ] %*% t(shocks_std[t - 1, ]))
+    Q[,, t] <- .copula_Q_tp1(spec, Q[,, t - 1], shocks_std[t - 1, ])
   }
 
   Q[,, -1]
@@ -181,6 +224,41 @@ copula_filter <- function(spec, u) {
   correlation_list <- lapply(seq(T), fn)
 
   array(unlist(correlation_list), dim = c(N, N, T))
+}
+
+# Simulation -------------------------------------------------------------
+
+.copula_simulate_shocks <- function(spec, n.sim, Q_initial) {
+  N <- ncol(Q_initial)
+
+  shocks <- matrix(ncol = N, nrow = n.sim)
+  shocks_std <- shocks
+  Q <- array(dim = c(N, N, n.sim))
+  Correlation <- Q
+
+  # Initiate dynamics
+  Q[,, 1] <- Q_initial
+  Correlation[,, 1] <- .copula_Correlation(array(Q[,, 1], dim = c(N, N, 1)))
+
+  # If the copula is constant, there is no need to update the dynamics.
+  # We can just simulate n.sim shocks directly
+  if (copula_is_constant(spec)) {
+    shocks <- .copula_rghyp(n.sim, spec, Correlation[,, 1])
+    return(shocks)
+  }
+
+  for (t in seq(n.sim)) {
+    shocks[t, ] <- .copula_rghyp(1, spec, Correlation[,, t])
+
+    if (t < n.sim) {
+      shocks_std[t, ] <- .copula_shocks_std(spec, rbind(shocks[t, ]))
+      Q[,, t + 1] <- .copula_Q_tp1(spec, Q[,, t], shocks_std[t, ])
+      Correlation[,, t + 1] <- .copula_Correlation(array(Q[,, t + 1],
+                                                         dim = c(N, N, 1)))
+    }
+  }
+
+  shocks
 }
 
 # Log Likelihoods --------------------------------------------------------
