@@ -3,6 +3,7 @@
 export(CopulaDistribution)
 export(CopulaDynamics)
 export(CopulaSpecification)
+export(copula_Upsilon)
 export(copula_filter)
 export(copula_is_constant)
 export(copula_simulate)

@@ -4,7 +4,8 @@
 \alias{copula_simulate}
 \title{Simulate uniform residuals from the copula}
 \usage{
-copula_simulate(spec, n.sim, m.sim, Q_initial = NULL)
+copula_simulate(spec, n.sim, m.sim, Q_T = NULL, shocks_T = NULL,
+  Upsilon = NULL)
 }
 \arguments{
 \item{spec}{CopulaSpecification}
@@ -13,7 +14,11 @@ copula_simulate(spec, n.sim, m.sim, Q_initial = NULL)
 
 \item{m.sim}{Number of simulation}
 
-\item{Q_initial}{What to set Q to initially (default: Omega)}
+\item{Q_T}{The final Q_t your dataset (default: Omega)}
+
+\item{shocks_T}{Final shocks in dataset}
+
+\item{Upsilon}{NxNxn.sim Upsilon matrix}
 }
 \value{
 List of m.sim n.simxN uniform residuals

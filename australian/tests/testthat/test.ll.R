@@ -20,12 +20,12 @@ setup_uniform <- function() {
   pnorm(x)
 }
 
-expect_ll <- function(dynamics, distribution, ll) {
+expect_ll <- function(dynamics, distribution, ll, Upsilon = NULL) {
   spec <- copula_spec(dynamics, distribution)
   u <- setup_uniform()
 
   registerDoSEQ()
-  filtered <- australian::copula_filter(spec, u)
+  filtered <- australian::copula_filter(spec, u, Upsilon)
   expect_equal(filtered$ll, ll, tolerance = 1e-4)
 }
 
@@ -76,5 +76,55 @@ test_that('LL(0.06 / 0.91, ghst(8, c(0.25, 0.25)))', {
     list(alpha = 0.06, beta = 0.91),
     list(nu = 8, gamma = rep(0.25, 2)),
     237.8483
+  )
+})
+
+# Dynamic Copulas with Upsilon -------------------------------------------
+
+time_Upsilon <- function() {
+  # Constructing a simple time trend with two identical coefficents; Note:
+  # Opposite time trends is not very likely.
+  t <- 1:2000
+  X <- array(rbind(t, t), c(2, 1, length(t)))
+  theta <- rbind(0.50, 0.50)
+  australian::copula_Upsilon(theta, X)
+}
+
+test_that('LL(0.06 / 0.91, normal, with time trend)', {
+  Upsilon <- time_Upsilon()
+
+  # It's a bit worrisome that this has a higher likelihood than the copula
+  # without time trend. But maybe it's the dynamicity too.
+  expect_ll(
+    list(alpha = 0.06, beta = 0.91, phi = 0.50),
+    list(nu = Inf, gamma = rep(0, 2)),
+    248.5022,
+    Upsilon = Upsilon
+  )
+})
+
+test_that('LL(0.06 / 0.91, t(8), with time trend)', {
+  Upsilon <- time_Upsilon()
+
+  # It's a bit worrisome that this has a higher likelihood than the copula
+  # without time trend. But maybe it's the dynamicity too.
+  expect_ll(
+    list(alpha = 0.06, beta = 0.91, phi = 0.50),
+    list(nu = 8, gamma = rep(0, 2)),
+    241.3514,
+    Upsilon = Upsilon
+  )
+})
+
+test_that('LL(0.06 / 0.91, ghst(8, c(0.25, 0.25)), with time trend)', {
+  Upsilon <- time_Upsilon()
+
+  # It's a bit worrisome that this has a higher likelihood than the copula
+  # without time trend. But maybe it's the dynamicity too.
+  expect_ll(
+    list(alpha = 0.06, beta = 0.91, phi = 0.50),
+    list(nu = 8, gamma = rep(0.25, 2)),
+    238.5208,
+    Upsilon = Upsilon
   )
 })

@@ -13,8 +13,10 @@ CopulaDistribution <- setClass('CopulaDistribution',
 CopulaDynamics <- setClass('CopulaDynamics',
                            slots = c(alpha = 'numeric',
                                      beta = 'numeric',
+                                     phi = 'numeric',
                                      Omega = 'matrixOrNULL'),
-                           prototype = list(alpha = 0, beta = 0, Omega = NULL))
+                           prototype = list(alpha = 0, beta = 0, phi = 0,
+                                            Omega = NULL))
 
 #' @export CopulaSpecification
 CopulaSpecification <- setClass('CopulaSpecification',
@@ -22,22 +24,36 @@ CopulaSpecification <- setClass('CopulaSpecification',
                                           dynamics = 'CopulaDynamics'))
 
 #' @export
-copula_filter <- function(spec, u) {
+copula_filter <- function(spec, u, Upsilon = NULL) {
   shocks <- .copula_shocks(spec, u)
-  shocks_std <- .copula_shocks_std(spec, shocks)
 
-  if (is.null(spec@dynamics@Omega)) {
-    spec@dynamics@Omega <- .copula_Omega(spec, shocks_std)
+  # Standardize and conditionalize shocks as appropriate for DCC model. The
+  # naming is kind of unfortunate here; legacy from before.
+  shocks_std <- .copula_shocks_standardize(spec, shocks)
+  shocks_std <- .copula_shocks_conditionalize(spec, shocks_std)
+
+  if (is.null(Upsilon)) {
+    # phi must be 0 if you did not supply Upsilon
+    stopifnot(spec@dynamics@phi == 0)
+
+    # Create a dummy series of Upsilon, so that we don't have to check for
+    # it in every function. Note: We don't create an NxN array because no
+    # function should care about Upsilon if phi == 0, so just save space and
+    # do 1x1
+    Upsilon <- array(0, c(1, 1, nrow(u)))
   }
 
-  Correlation <- .copula_Correlation(.copula_Q(spec, shocks_std))
+  if (is.null(spec@dynamics@Omega)) {
+    spec@dynamics@Omega <- .copula_Omega(spec, shocks_std, Upsilon)
+  }
+
+  Correlation <- .copula_Correlation(.copula_Q(spec, shocks_std, Upsilon))
 
   scores <- .copula_scores(spec, shocks, Correlation)
 
   list(
     spec = spec,
     shocks = shocks,
-    shocks_std = shocks_std,
     Correlation = Correlation,
     scores = scores,
     ll = sum(scores)
@@ -49,20 +65,44 @@ copula_filter <- function(spec, u) {
 #' @param spec CopulaSpecification
 #' @param n.sim Simulation horizon
 #' @param m.sim Number of simulation
-#' @param Q_initial What to set Q to initially (default: Omega)
+#' @param Q_T The final Q_t your dataset (default: Omega)
+#' @param shocks_T Final shocks in dataset
+#' @param Upsilon NxNxn.sim Upsilon matrix
 #'
 #' @return List of m.sim n.simxN uniform residuals
 #' @export
-copula_simulate <- function(spec, n.sim, m.sim, Q_initial = NULL) {
-  if (is.null(Q_initial)) {
+copula_simulate <- function(spec, n.sim, m.sim, Q_T = NULL, shocks_T = NULL, Upsilon = NULL) {
+  if (is.null(Q_T)) {
     stopifnot(!is.null(spec@dynamics@Omega))
-    Q_initial <- spec@dynamics@Omega
+
+    if (!copula_is_constant(spec)) {
+      warning("You are simulating from a dynamic copula but did not provide ",
+              "your final Q_t matrix. This is probably a mistake. Omega will ",
+              "be assumed")
+    }
+
+    Q_T <- spec@dynamics@Omega
+  }
+
+  if (is.null(shocks_T)) {
+    if (!copula_is_constant(spec)) {
+      warning("You are simulating from a dynamic copula but did not provide ",
+              "your final shocks. This is probably a mistake. We will assume ",
+              "zero shocks at time T")
+    }
+
+    shocks_T <- rbind(rep(0, ncol(Q_T)))
+  }
+
+  if (is.null(Upsilon)) {
+    stopifnot(spec@dynamics@phi == 0)
+    Upsilon <- array(0, c(1, 1, n.sim))
   }
 
   uv_distributions <- .copula_uv_distributions(spec)
 
-  foreach(i = 1:m.sim) %dopar% {
-    shocks <- .copula_simulate_shocks(spec, n.sim, Q_initial)
+  foreach(i = 1:m.sim) %do% {
+    shocks <- .copula_simulate_shocks(spec, n.sim, Q_T, shocks_T, Upsilon)
 
     # Compute the uniform residuals using the marginal distributions of
     # the copula
@@ -71,9 +111,66 @@ copula_simulate <- function(spec, n.sim, m.sim, Q_initial = NULL) {
   }
 }
 
+#' Fit copula to uniform residuals.
+#'
+#' Note: This takes a long time.
+#'
+#' @param spec CopulaSpecification to fit
+#' @param u TxN uniform residuals
+#' @param constant Optimize constant copula (alpha = beta = 0)
+#'
+#' @return Fitted CopulaSpecification
+#' @export
+copula_fit <- function(spec, u, constant = F) {
+  # Figure out what parameters we're optimizing over
+  distribution <- spec@distribution
+  dynamics <- spec@dynamics
+
+  if (constant && !all(c(dynamics@alpha, dynamics@beta) == 0)) {
+    stop('Constant copula requires alpha = beta = 0')
+  }
+}
+
 #' @export
 copula_is_constant <- function(spec) {
   all(c(spec@dynamics@alpha, spec@dynamics@beta) == 0)
+}
+
+#' Build Upsilon array from Nxk coefficients and independent variables
+#'
+#' It's impossible for the copula to know how many of your theta are "free"
+#' or how many of your X are identical; it just takes the Upsilon series as
+#' given. You can construct it yourself, or use this function to build an
+#' appropriate form following the appendix in Christoffersen et al. (2012).
+#'
+#' @param theta Nxk matrix of regressors
+#' @param X Nxkxt array of independent data
+#'
+#' @return Nxkxt Upsilon array (correlation matrix)
+#' @export
+copula_Upsilon <- function(theta, X) {
+  stopifnot(ncol(theta) == ncol(X))
+  stopifnot(nrow(theta) == nrow(X))
+
+  N <- nrow(X)
+  k <- ncol(X)
+  T <- dim(X)[3]
+
+  Upsilon <- array(NA, c(N, N, T))
+
+  for (t in seq(T)) {
+    A_t <- cbind(diag(1, N), theta * X[,,t])
+
+    # Compute each row's root mean square; then dividing by this vector
+    # will actually work as if we did it row-by-row; R recycles the vector
+    # as necessary and works column-by-column
+    row_RMS <- sqrt(rowSums(A_t ^ 2))
+    A_bar <- A_t / row_RMS
+
+    Upsilon[,, t] <- A_bar %*% t(A_bar)
+  }
+
+  Upsilon
 }
 
 .copula_rghyp <- function(n, spec, Correlation) {
@@ -122,25 +219,42 @@ copula_is_constant <- function(spec) {
   matrix(unlist(shocks), ncol = ncol(u))
 }
 
-#' Standardize shocks by forcing them to have expectation 0 and unit variance
-#' and scale them by the conditional variance in the DCC model. See
-#' Christoffersen for details and whatever paper he refers to for
-#' justification.
+#' If shocks are not Gaussian, they don't have expectation zero and unit
+#' variance, so we subtract the distribution mean and divide by distribution
+#' standard deviation
 #'
 #' @param spec CopulaSpecification
 #' @param shocks TxN shocks
 #'
-#' @return TxN matrix of standardized shocks
-.copula_shocks_std <- function(spec, shocks) {
+#' @return TxN standardized shocks
+.copula_shocks_standardize <- function(spec, shocks) {
   uv_distributions <- .copula_uv_distributions(spec)
-  T <- nrow(shocks)
+  shocks <- rbind(shocks)
 
-  # Step 1: Standardize shocks in traditional sense of the word by subtracting
-  # the distribution mean and dividing by standard deviation.
   standardize <- function(dist, i)
     (shocks[, i] - ghyp::mean(dist)) / sqrt(ghyp::vcov(dist))
 
-  shocks <- rbind(mapply(standardize, uv_distributions, 1:ncol(shocks)))
+  rbind(mapply(standardize, uv_distributions, 1:ncol(shocks)))
+}
+
+#' Conditionalize shocks by dividing them with the conditional standard
+#' deviation in th DCC model. See Christoffersen for details and whatever
+#' paper he refers to for justification.
+#'
+#' This function is only called as part of the recursion to build Omega.
+#' It should not be called if you already have Q_t; just divide by
+#' sqrt(diag(Q_t)) (see simulation code)
+#'
+#' Note: This is different from standardizing which should already be done!
+#' I.e. you give me standard UNCONDITIONAL shocks and I give you CONDITIONAL
+#' shocks.
+#'
+#' @param spec CopulaSpecification
+#' @param shocks TxN shocks (standardized)
+#'
+#' @return TxN matrix of conditional shocks
+.copula_shocks_conditionalize <- function(spec, shocks) {
+  T <- nrow(shocks)
 
   # Step 2: Following Christoffersen's first paper, we also scale the shocks
   # by the "conditional variance" for this period. Supposedly improves the
@@ -167,7 +281,7 @@ copula_is_constant <- function(spec) {
   shocks_std[-1, ]
 }
 
-.copula_Omega <- function(spec, shocks_std, use_cor = F) {
+.copula_Omega <- function(spec, shocks_std, Upsilon, use_cor = F) {
   # Christoffersen does write out the second formula, but this might be a
   # sloppy way of meaning the sample correlation; difference should be minimal
   # since shocks should be standardized, however, the sample might be "off"
@@ -178,22 +292,32 @@ copula_is_constant <- function(spec) {
     correlation <- (t(shocks_std) %*% shocks_std) / nrow(shocks_std)
   }
 
-  # TODO Add support for computing Gamma matrix here as well
-  correlation
+  if (spec@dynamics@phi == 0) {
+    return(correlation)
+  }
+
+  # We have to deal with Upsilon; compute element-wise average and weight
+  # together to Omega
+  mean_Upsilon <- apply(Upsilon, c(1, 2), mean)
+  phi <- spec@dynamics@phi
+
+  (correlation - phi * mean_Upsilon) / (1 - phi)
 }
 
-.copula_Q_tp1 <- function(spec, Q_t, shocks_std_t) {
+.copula_Q_tp1 <- function(spec, Q_t, shocks_std_t, Upsilon_t) {
   alpha <- spec@dynamics@alpha
   beta <- spec@dynamics@beta
   Omega <- spec@dynamics@Omega
+  phi <- spec@dynamics@phi
+
   stopifnot(!is.null(Omega))
 
-  (1 - alpha - beta) * Omega +
+  (1 - alpha - beta) * ((1 - phi) * Omega + phi * Upsilon_t) +
     beta * Q_t +
     alpha * shocks_std_t %*% t(shocks_std_t)
 }
 
-.copula_Q <- function(spec, shocks_std) {
+.copula_Q <- function(spec, shocks_std, Upsilon) {
   N <- ncol(shocks_std)
   T <- nrow(shocks_std)
 
@@ -205,7 +329,10 @@ copula_is_constant <- function(spec) {
   Q[,, 1] <- spec@dynamics@Omega
 
   for (t in 2:(T + 1)) {
-    Q[,, t] <- .copula_Q_tp1(spec, Q[,, t - 1], shocks_std[t - 1, ])
+    # Upsilon_t is contemporaneous with Q_t, however, we don't add an
+    # additional row to it so we still pick the element from t - 1
+    Upsilon_t <- Upsilon[,, t - 1]
+    Q[,, t] <- .copula_Q_tp1(spec, Q[,, t - 1], shocks_std[t - 1, ], Upsilon_t)
   }
 
   Q[,, -1]
@@ -228,37 +355,47 @@ copula_is_constant <- function(spec) {
 
 # Simulation -------------------------------------------------------------
 
-.copula_simulate_shocks <- function(spec, n.sim, Q_initial) {
-  N <- ncol(Q_initial)
-
-  shocks <- matrix(ncol = N, nrow = n.sim)
-  shocks_std <- shocks
-  Q <- array(dim = c(N, N, n.sim))
-  Correlation <- Q
-
-  # Initiate dynamics
-  Q[,, 1] <- Q_initial
-  Correlation[,, 1] <- .copula_Correlation(array(Q[,, 1], dim = c(N, N, 1)))
+.copula_simulate_shocks <- function(spec, n.sim, Q_T, shocks_T, Upsilon) {
+  N <- ncol(Q_T)
 
   # If the copula is constant, there is no need to update the dynamics.
   # We can just simulate n.sim shocks directly
   if (copula_is_constant(spec)) {
+    Correlation <- .copula_Correlation(array(Q_T, dim = c(N, N, 1)))
     shocks <- .copula_rghyp(n.sim, spec, Correlation[,, 1])
     return(shocks)
   }
 
-  for (t in seq(n.sim)) {
-    shocks[t, ] <- .copula_rghyp(1, spec, Correlation[,, t])
+  # We will simulate n.sim shocks but we need to update the dynamics using
+  # the end of the current series, so add one row for that
+  shocks <- matrix(ncol = N, nrow = n.sim + 1)
+  shocks_std <- shocks
+  Q <- array(dim = c(N, N, n.sim + 1))
+  Correlation <- Q
 
-    if (t < n.sim) {
-      shocks_std[t, ] <- .copula_shocks_std(spec, rbind(shocks[t, ]))
-      Q[,, t + 1] <- .copula_Q_tp1(spec, Q[,, t], shocks_std[t, ])
-      Correlation[,, t + 1] <- .copula_Correlation(array(Q[,, t + 1],
-                                                         dim = c(N, N, 1)))
-    }
+  # Initiate dynamics with the end of the series (a model of higher order
+  # might support Q_T being an array like preresiduals for rugarch)
+  shocks[1, ] <- shocks_T
+  shocks_std[1, ] <- .copula_shocks_standardize(spec, shocks[1, ]) / sqrt(diag(Q_T))
+  Q[,, 1] <- Q_T
+  Correlation[,, 1] <- .copula_Correlation(array(Q[,, 1], dim = c(N, N, 1)))
+
+  for (t in 2:(n.sim + 1)) {
+    # Update Q as before; Note that we pick Upsilon[,, t - 1] as in the filter
+    # because we didn't add an extra row to it.
+    Q[,, t] <- .copula_Q_tp1(
+      spec,
+      Q[,, t - 1],
+      shocks_std[t - 1, ],
+      Upsilon[,, t - 1]
+    )
+    Correlation[,, t] <- .copula_Correlation(array(Q[,, t], c(N, N, 1)))
+
+    shocks[t, ] <- .copula_rghyp(1, spec, Correlation[,, t])
+    shocks_std[t, ] <- .copula_shocks_standardize(spec, shocks[t, ]) / sqrt(diag(Q[,, t]))
   }
 
-  shocks
+  rbind(shocks[-1, ])
 }
 
 # Log Likelihoods --------------------------------------------------------
