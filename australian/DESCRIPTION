@@ -16,6 +16,7 @@ Imports:
   parallel,
   doParallel,
   foreach,
+  magic,
   rugarch (>= 1.3-6),
   zoo
 Suggests: testthat
