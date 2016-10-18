@@ -20,12 +20,12 @@ setup_uniform <- function() {
   pnorm(x)
 }
 
-expect_ll <- function(dynamics, distribution, ll, Upsilon = NULL) {
+expect_ll <- function(dynamics, distribution, ll, X = NULL) {
   spec <- copula_spec(dynamics, distribution)
   u <- setup_uniform()
 
   registerDoSEQ()
-  filtered <- australian::copula_filter(spec, u, Upsilon)
+  filtered <- australian::copula_filter(spec, u, X)
   expect_equal(filtered$ll, ll, tolerance = 1e-4)
 }
 
@@ -81,50 +81,46 @@ test_that('LL(0.06 / 0.91, ghst(8, c(0.25, 0.25)))', {
 
 # Dynamic Copulas with Upsilon -------------------------------------------
 
-time_Upsilon <- function() {
-  # Constructing a simple time trend with two identical coefficents; Note:
-  # Opposite time trends is not very likely.
+time_trend <- function() {
   t <- 1:2000
-  X <- array(rbind(t, t), c(2, 1, length(t)))
-  theta <- rbind(0.50, 0.50)
-  australian::copula_Upsilon(theta, X)
+  array(rbind(t, t), c(2, 1, length(t)))
 }
 
 test_that('LL(0.06 / 0.91, normal, with time trend)', {
-  Upsilon <- time_Upsilon()
+  X <- time_trend()
 
   # It's a bit worrisome that this has a higher likelihood than the copula
   # without time trend. But maybe it's the dynamicity too.
   expect_ll(
-    list(alpha = 0.06, beta = 0.91, phi = 0.50),
+    list(alpha = 0.06, beta = 0.91, phi = 0.50, theta = rbind(0.50, 0.50)),
     list(nu = Inf, gamma = rep(0, 2)),
     248.5022,
-    Upsilon = Upsilon
+    X = X
   )
 })
 
 test_that('LL(0.06 / 0.91, t(8), with time trend)', {
-  Upsilon <- time_Upsilon()
+  X <- time_trend()
 
   # It's a bit worrisome that this has a higher likelihood than the copula
   # without time trend. But maybe it's the dynamicity too.
   expect_ll(
-    list(alpha = 0.06, beta = 0.91, phi = 0.50),
+    list(alpha = 0.06, beta = 0.91, phi = 0.50, theta = rbind(0.50, 0.50)),
     list(nu = 8, gamma = rep(0, 2)),
     241.3514,
-    Upsilon = Upsilon
+    X = X
   )
 })
 
 test_that('LL(0.06 / 0.91, ghst(8, c(0.25, 0.25)), with time trend)', {
-  Upsilon <- time_Upsilon()
+  X <- time_trend()
 
   # It's a bit worrisome that this has a higher likelihood than the copula
   # without time trend. But maybe it's the dynamicity too.
   expect_ll(
-    list(alpha = 0.06, beta = 0.91, phi = 0.50),
+    list(alpha = 0.06, beta = 0.91, phi = 0.50, theta = rbind(0.50, 0.50)),
     list(nu = 8, gamma = rep(0.25, 2)),
     238.5208,
-    Upsilon = Upsilon
+    X = X
   )
 })

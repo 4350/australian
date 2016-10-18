@@ -14,9 +14,10 @@ CopulaDynamics <- setClass('CopulaDynamics',
                            slots = c(alpha = 'numeric',
                                      beta = 'numeric',
                                      phi = 'numeric',
+                                     theta = 'matrixOrNULL',
                                      Omega = 'matrixOrNULL'),
                            prototype = list(alpha = 0, beta = 0, phi = 0,
-                                            Omega = NULL))
+                                            theta = NULL, Omega = NULL))
 
 #' @export CopulaSpecification
 CopulaSpecification <- setClass('CopulaSpecification',
@@ -24,7 +25,7 @@ CopulaSpecification <- setClass('CopulaSpecification',
                                           dynamics = 'CopulaDynamics'))
 
 #' @export
-copula_filter <- function(spec, u, Upsilon = NULL) {
+copula_filter <- function(spec, u, X = NULL) {
   shocks <- .copula_shocks(spec, u)
 
   # Standardize and conditionalize shocks as appropriate for DCC model. The
@@ -32,8 +33,8 @@ copula_filter <- function(spec, u, Upsilon = NULL) {
   shocks_std <- .copula_shocks_standardize(spec, shocks)
   shocks_std <- .copula_shocks_conditionalize(spec, shocks_std)
 
-  if (is.null(Upsilon)) {
-    # phi must be 0 if you did not supply Upsilon
+  if (is.null(X)) {
+    # phi must be 0 if you did not supply X
     stopifnot(spec@dynamics@phi == 0)
 
     # Create a dummy series of Upsilon, so that we don't have to check for
@@ -41,6 +42,9 @@ copula_filter <- function(spec, u, Upsilon = NULL) {
     # function should care about Upsilon if phi == 0, so just save space and
     # do 1x1
     Upsilon <- array(0, c(1, 1, nrow(u)))
+  }
+  else {
+    Upsilon <- copula_Upsilon(spec@dynamics@theta, X)
   }
 
   if (is.null(spec@dynamics@Omega)) {
@@ -67,11 +71,11 @@ copula_filter <- function(spec, u, Upsilon = NULL) {
 #' @param m.sim Number of simulation
 #' @param Q_T The final Q_t your dataset (default: Omega)
 #' @param shocks_T Final shocks in dataset
-#' @param Upsilon NxNxn.sim Upsilon matrix
+#' @param X Nxkxn.sim exogenous regressors
 #'
 #' @return List of m.sim n.simxN uniform residuals
 #' @export
-copula_simulate <- function(spec, n.sim, m.sim, Q_T = NULL, shocks_T = NULL, Upsilon = NULL) {
+copula_simulate <- function(spec, n.sim, m.sim, Q_T = NULL, shocks_T = NULL, X = NULL) {
   if (is.null(Q_T)) {
     stopifnot(!is.null(spec@dynamics@Omega))
 
@@ -94,9 +98,12 @@ copula_simulate <- function(spec, n.sim, m.sim, Q_T = NULL, shocks_T = NULL, Ups
     shocks_T <- rbind(rep(0, ncol(Q_T)))
   }
 
-  if (is.null(Upsilon)) {
+  if (is.null(X)) {
     stopifnot(spec@dynamics@phi == 0)
     Upsilon <- array(0, c(1, 1, n.sim))
+  }
+  else {
+    Upsilon <- copula_Upsilon(spec@dynamics@theta, X)
   }
 
   uv_distributions <- .copula_uv_distributions(spec)
