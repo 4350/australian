@@ -1,7 +1,8 @@
 #' @importFrom foreach foreach %do% %dopar%
+#' @importFrom methods new
 NULL
 
-setClassUnion("matrixOrNULL",members=c("matrix", "NULL"))
+setClassUnion("matrixOrNULL", members = c("matrix", "NULL"))
 
 #' @export CopulaDistribution
 CopulaDistribution <- setClass('CopulaDistribution',
@@ -115,26 +116,6 @@ copula_simulate <- function(spec, n.sim, m.sim, Q_T = NULL, shocks_T = NULL, X =
     # the copula
     sapply(seq_along(uv_distributions),
            function(i) ghyp::pghyp(shocks[, i], uv_distributions[[i]]))
-  }
-}
-
-#' Fit copula to uniform residuals.
-#'
-#' Note: This takes a long time.
-#'
-#' @param spec CopulaSpecification to fit
-#' @param u TxN uniform residuals
-#' @param constant Optimize constant copula (alpha = beta = 0)
-#'
-#' @return Fitted CopulaSpecification
-#' @export
-copula_fit <- function(spec, u, constant = F) {
-  # Figure out what parameters we're optimizing over
-  distribution <- spec@distribution
-  dynamics <- spec@dynamics
-
-  if (constant && !all(c(dynamics@alpha, dynamics@beta) == 0)) {
-    stop('Constant copula requires alpha = beta = 0')
   }
 }
 
@@ -293,7 +274,7 @@ copula_Upsilon <- function(theta, X) {
   # sloppy way of meaning the sample correlation; difference should be minimal
   # since shocks should be standardized, however, the sample might be "off"
   if (use_cor) {
-    correlation <- cor(shocks_std)
+    correlation <- stats::cor(shocks_std)
   }
   else {
     correlation <- (t(shocks_std) %*% shocks_std) / nrow(shocks_std)
