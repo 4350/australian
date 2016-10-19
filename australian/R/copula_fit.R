@@ -38,6 +38,11 @@ copula_fit <- function(spec, u, X = NULL, distribution = 'norm',
                               upsilon = upsilon)
   }
   else {
+    method <- "Nelder-Mead"
+    if (length(pars$pars) == 1) {
+      method <- "Brent"
+    }
+
     optimized <- stats::constrOptim(
       pars$pars,
       copula_optimize,
@@ -53,6 +58,7 @@ copula_fit <- function(spec, u, X = NULL, distribution = 'norm',
       ui = pars$ui,
       ci = pars$ci,
 
+      method = method,
       control = list(
         trace = 6,
         maxit = 1000
